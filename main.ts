@@ -1,13 +1,13 @@
-// ポケモンSVランクバトルお知らせ収集スクリプト (CLI版)
+// ポケモンチャンピオンズ ランクバトルお知らせ収集スクリプト (CLI版)
 // 実行方法: deno run --allow-net --allow-read --allow-write --unstable-kv main.ts
 
 import "@std/dotenv/load";
-import { PokemonSVScraper } from "./scraper.ts";
+import { PokemonChampionsScraper } from "./scraper.ts";
 
 // メイン処理
 async function main() {
   const kv = await Deno.openKv();
-  const scraper = new PokemonSVScraper(kv);
+  const scraper = new PokemonChampionsScraper(kv);
 
   try {
     // 引数で動作を切り替え

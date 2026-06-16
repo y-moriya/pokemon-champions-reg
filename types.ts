@@ -1,15 +1,17 @@
-// ポケモンSVランクバトルお知らせ収集 - 型定義
+// ポケモンチャンピオンズ ランクバトルお知らせ収集 - 型定義
 
 export interface NewsListItem {
   id: string;
-  reg: string;
+  reg: number | string;
   title: string;
-  kind: string;
+  infoTab?: number;
+  infoKind?: number;
+  kind?: string;
   kindTxt: string;
   banner: string;
-  isImportant: string;
-  stAt: string;
-  newAt: string;
+  isImportant: number | string;
+  stAt: number | string;
+  newAt?: number | string;
   link: string;
 }
 
@@ -21,7 +23,7 @@ export interface NewsListData {
 export interface RankBattleNews {
   url: string;
   title: string;
-  season: number;
+  season: string;
   regulation: string;
   fetchedAt: string;
 }

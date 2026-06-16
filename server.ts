@@ -1,9 +1,9 @@
-// ポケモンSVランクバトルお知らせ収集サーバー (Hono版)
+// ポケモンチャンピオンズ ランクバトルお知らせ収集サーバー (Hono版)
 // 実行方法: deno run --allow-net --allow-read --allow-write --allow-env --unstable-kv server.ts
 
 import { Hono } from "hono";
 import "@std/dotenv/load";
-import { PokemonSVScraper } from "./scraper.ts";
+import { PokemonChampionsScraper } from "./scraper.ts";
 import type { RankBattleNews } from "./types.ts";
 
 const app = new Hono();
@@ -11,7 +11,7 @@ const app = new Hono();
 // ルートエンドポイント
 app.get("/", (c) => {
   return c.json({
-    message: "ポケモンSVランクバトルお知らせ収集API",
+    message: "ポケモンチャンピオンズ ランクバトルお知らせ収集API",
     endpoints: {
       "POST /api/scrape": "スクレイピング実行",
       "GET /api/list": "保存済みニュース一覧取得",
@@ -24,7 +24,7 @@ app.get("/", (c) => {
 // スクレイピング実行エンドポイント
 app.post("/api/scrape", async (c) => {
   const kv = await Deno.openKv();
-  const scraper = new PokemonSVScraper(kv);
+  const scraper = new PokemonChampionsScraper(kv);
 
   try {
     // コンソール出力をキャプチャするための配列
@@ -79,8 +79,8 @@ app.get("/api/list", async (c) => {
       newsList.push(entry.value);
     }
 
-    // シーズン番号でソート
-    newsList.sort((a, b) => a.season - b.season);
+    // シーズン名でソート（自然順ソート）
+    newsList.sort((a, b) => a.season.localeCompare(b.season, undefined, { numeric: true, sensitivity: 'base' }));
 
     return c.json({
       success: true,
@@ -106,7 +106,7 @@ app.get("/api/json", async (c) => {
   const kv = await Deno.openKv();
 
   try {
-    const result = await kv.get<{ [key: number]: string }>([
+    const result = await kv.get<{ [key: string]: string }>([
       "season_regulation_map",
     ]);
 
@@ -142,7 +142,7 @@ app.get("/api/json", async (c) => {
 // Netlifyデプロイエンドポイント
 app.post("/api/deploy", async (c) => {
   const kv = await Deno.openKv();
-  const scraper = new PokemonSVScraper(kv);
+  const scraper = new PokemonChampionsScraper(kv);
 
   try {
     // コンソール出力をキャプチャするための配列

@@ -1,10 +1,10 @@
-// ポケモンSVランクバトルお知らせ収集 - スクレイパークラス
+// ポケモンチャンピオンズ ランクバトルお知らせ収集 - スクレイパークラス
 
 import { DOMParser } from "@b-fuze/deno-dom";
 import type { NewsListItem, NewsListData, RankBattleNews } from "./types.ts";
 import { LIST_JSON_URL, BASE_URL } from "./constants.ts";
 
-export class PokemonSVScraper {
+export class PokemonChampionsScraper {
   private kv: Deno.Kv;
 
   constructor(kv: Deno.Kv) {
@@ -46,39 +46,37 @@ export class PokemonSVScraper {
 
   // ランクバトルのお知らせのみをフィルタリング
   filterRankBattleNews(newsList: NewsListItem[]): NewsListItem[] {
-    // kind: "2" が「ランクバトル」
-    // タイトルが「YYYY年MM月シーズン（シーズンN）開催中！」の形式
-    const titlePattern = /^\d{4}年\d{1,2}月シーズン（シーズン\d+）開催中！$/;
+    // ポケモンチャンピオンズではタイトルが「「ランクバトル シーズンM-N」開催中！」などの形式
+    const titlePattern = /^「ランクバトル シーズン(?:[A-Z]-)?\d+」開催中！$/;
     
     const filtered = newsList.filter((item) => {
-      return item.kind === "2" && 
-             item.kindTxt === "ランクバトル" && 
-             titlePattern.test(item.title);
+      const isRankBattle = item.kindTxt === "ランクバトル" && 
+                           (String(item.infoKind) === "11" || item.kind === "11" || item.kind === "2");
+      return isRankBattle && titlePattern.test(item.title);
     });
 
     console.log(`\n🔍 フィルタリング結果: ${filtered.length}件のランクバトルシーズン告知を発見`);
     return filtered;
   }
 
-  // シーズン番号を抽出（例: "シーズン36" → 36）
-  private extractSeason(text: string): number | null {
-    const seasonMatch = text.match(/シーズン(\d+)/);
+  // シーズン名を抽出（例: "シーズンM-2" → "M-2"）
+  private extractSeason(text: string): string | null {
+    const seasonMatch = text.match(/シーズン([A-Za-z]+-\d+|\d+)/);
     if (seasonMatch && seasonMatch[1]) {
-      return parseInt(seasonMatch[1], 10);
+      return seasonMatch[1];
     }
     return null;
   }
 
-  // レギュレーションを抽出（例: "レギュレーションJ" → "J"）
+  // レギュレーションを抽出（例: "レギュレーションM-A" → "M-A"）
   private extractRegulation(text: string): string | null {
-    const regulationMatch = text.match(/レギュレーション([A-ZＡ-Ｚ])/);
+    const regulationMatch = text.match(/レギュレーション([A-ZＡ-Ｚ]-[A-ZＡ-Ｚ]|[A-ZＡ-Ｚ])/);
     if (regulationMatch && regulationMatch[1]) {
       const letter = regulationMatch[1];
-      // 全角の場合は半角に変換
-      if (letter.charCodeAt(0) >= 0xFF21 && letter.charCodeAt(0) <= 0xFF3A) {
-        return String.fromCharCode(letter.charCodeAt(0) - 0xFEE0);
-      }
-      return letter;
+      // 全角英字・全角ハイフンを半角に変換
+      const normalized = letter.replace(/[Ａ-Ｚ]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xFEE0))
+                               .replace(/－/g, "-");
+      return normalized;
     }
     return null;
   }
@@ -101,8 +99,8 @@ export class PokemonSVScraper {
         throw new Error("HTMLの解析に失敗しました");
       }
 
-      // メインテキストを取得
-      const mainTextElement = doc.querySelector("div.main-text");
+      // メインテキストを取得（ポケモンチャンピオンズの div.article-body に対応）
+      const mainTextElement = doc.querySelector("div.article-body") || doc.querySelector("article") || doc.querySelector("div.main-text");
       const mainText = mainTextElement?.textContent || "";
 
       // シーズンとレギュレーションを抽出
@@ -214,19 +212,18 @@ export class PokemonSVScraper {
   // シーズン→レギュレーションマップをKVに保存
   private async updateSeasonRegulationMap(): Promise<void> {
     const entries = this.kv.list<RankBattleNews>({ prefix: ["news"] });
-    const seasonRegulationMap: { [key: number]: string } = {};
+    const seasonRegulationMap: { [key: string]: string } = {};
 
     for await (const entry of entries) {
       const news = entry.value;
       seasonRegulationMap[news.season] = news.regulation;
     }
 
-    // シーズン番号でソート
+    // シーズン名でソート（自然順ソート）
     const sortedSeasons = Object.keys(seasonRegulationMap)
-      .map(Number)
-      .sort((a, b) => a - b);
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
-    const result: { [key: number]: string } = {};
+    const result: { [key: string]: string } = {};
     for (const season of sortedSeasons) {
       result[season] = seasonRegulationMap[season];
     }
@@ -238,7 +235,7 @@ export class PokemonSVScraper {
 
   // シーズン番号とレギュレーションの対応をJSON形式で出力
   async outputJson(): Promise<void> {
-    const result = await this.kv.get<{ [key: number]: string }>(["season_regulation_map"]);
+    const result = await this.kv.get<{ [key: string]: string }>(["season_regulation_map"]);
     
     if (result.value === null) {
       console.error("シーズン→レギュレーションマップが見つかりません。先に 'scrape' を実行してください。");
@@ -264,7 +261,7 @@ export class PokemonSVScraper {
     }
 
     // シーズン→レギュレーションマップを取得
-    const result = await this.kv.get<{ [key: number]: string }>(["season_regulation_map"]);
+    const result = await this.kv.get<{ [key: string]: string }>(["season_regulation_map"]);
     
     if (result.value === null) {
       console.error("シーズン→レギュレーションマップが見つかりません。先に 'scrape' を実行してください。");
