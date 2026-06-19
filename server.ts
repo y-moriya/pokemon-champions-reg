@@ -4,7 +4,7 @@
 import { Hono } from "hono";
 import "@std/dotenv/load";
 import { PokemonChampionsScraper } from "./scraper.ts";
-import type { RankBattleNews } from "./types.ts";
+import type { RankBattleNews, PokemonInfo } from "./types.ts";
 
 const app = new Hono();
 
@@ -15,7 +15,9 @@ app.get("/", (c) => {
     endpoints: {
       "POST /api/scrape": "スクレイピング実行",
       "GET /api/list": "保存済みニュース一覧取得",
-      "GET /api/json": "シーズン→レギュレーションマップ取得",
+      "GET /api/json": "すべての情報をまとめた単一JSON取得",
+      "GET /api/pokemon": "すべてのレギュレーション of ポケモンリスト取得",
+      "GET /api/pokemon/:regulation": "指定レギュレーションのポケモンリスト取得",
       "POST /api/deploy": "NetlifyへのデプロイStarサーバーを実行",
     },
   });
@@ -101,21 +103,47 @@ app.get("/api/list", async (c) => {
   }
 });
 
-// シーズン→レギュレーションマップ取得エンドポイント
+// すべての情報をまとめた単一JSON取得エンドポイント
 app.get("/api/json", async (c) => {
+  const kv = await Deno.openKv();
+  const scraper = new PokemonChampionsScraper(kv);
+
+  try {
+    const allData = await scraper.generateAllDataJson();
+    return c.json({
+      success: true,
+      data: allData,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return c.json(
+      {
+        success: false,
+        error: message,
+      },
+      500
+    );
+  } finally {
+    kv.close();
+  }
+});
+
+// レギュレーションごとのポケモンリスト取得エンドポイント
+app.get("/api/pokemon/:regulation", async (c) => {
+  const regulation = c.req.param("regulation");
   const kv = await Deno.openKv();
 
   try {
-    const result = await kv.get<{ [key: string]: string }>([
-      "season_regulation_map",
+    const result = await kv.get<PokemonInfo[]>([
+      "regulation_pokemon",
+      regulation,
     ]);
 
     if (result.value === null) {
       return c.json(
         {
           success: false,
-          error:
-            "シーズン→レギュレーションマップが見つかりません。先に '/api/scrape' を実行してください。",
+          error: `レギュレーション ${regulation} のポケモンリストが見つかりません。先にスクレイピングを実行するか、正しいレギュレーション名を指定してください。`,
         },
         404
       );
@@ -123,7 +151,40 @@ app.get("/api/json", async (c) => {
 
     return c.json({
       success: true,
+      regulation,
+      count: result.value.length,
       data: result.value,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return c.json(
+      {
+        success: false,
+        error: message,
+      },
+      500
+    );
+  } finally {
+    kv.close();
+  }
+});
+
+// すべてのレギュレーションのポケモンリスト取得エンドポイント
+app.get("/api/pokemon", async (c) => {
+  const kv = await Deno.openKv();
+
+  try {
+    const entries = kv.list<PokemonInfo[]>({ prefix: ["regulation_pokemon"] });
+    const result: { [key: string]: PokemonInfo[] } = {};
+
+    for await (const entry of entries) {
+      const regulation = entry.key[1] as string;
+      result[regulation] = entry.value;
+    }
+
+    return c.json({
+      success: true,
+      data: result,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

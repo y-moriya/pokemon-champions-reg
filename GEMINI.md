@@ -22,15 +22,49 @@
   interface RankBattleNews {
     url: string;
     title: string;
-    season: number;
+    season: string;
     regulation: string;
+    pokemonLink?: string;
+    startAt?: string;
+    endAt?: string;
     fetchedAt: string;
   }
   ```
 
 ### 2. シーズン・レギュレーション対応マップ
 - **キー**: `["season_regulation_map"]`
-- **値の型**: `Record<number, string>` (例: `{"1": "A", "2": "A", "3": "B"}`)
+- **値の型**: `Record<string, string>` (例: `{"M-1": "M-A", "M-2": "M-A"}`)
+- **備考**: CLIの `json` やデプロイされる `map.json`、および API `/api/json` の出力では、この対応マップの代わりに**全部入りの単一JSON構造（SeasonsとRegulationsの両方を含めたもの）**が提供されます。
+
+#### 全部入りJSON構造
+```json
+{
+  "seasons": [
+    {
+      "season": "M-1",
+      "regulation": "M-A",
+      "startAt": "2026-04-08",
+      "endAt": "2026-05-13T10:59:00",
+      "url": "https://..."
+    }
+  ],
+  "regulations": {
+    "M-A": [
+      { "id": "0003-000", "name": "フシギバナ" }
+    ]
+  }
+}
+```
+
+### 3. レギュレーション別参加可能ポケモンリスト
+- **キー**: `["regulation_pokemon", regulation]`
+- **値の型**: `PokemonInfo[]` (from `types.ts`)
+  ```typescript
+  interface PokemonInfo {
+    id: string;
+    name: string;
+  }
+  ```
 
 ## 主要タスクの実行方法
 
@@ -62,7 +96,10 @@ deno task server
 お知らせのフォーマットが変わった場合は、[scraper.ts](file:///home/wellk/project/pokemon-champions-reg/scraper.ts) 内の以下の箇所を適宜調整してください。
 - `filterRankBattleNews` 内のタイトル判定用の正規表現 `titlePattern`
 - `extractSeason` および `extractRegulation` 内の正規表現抽出ロジック
-- `extractPageContent` 内のDOMクエリ（現在は `div.main-text` を取得しています）
+- `extractPageContent` 内のDOMクエリ（現在は `div.main-text` 等を取得し、また「参加できるポケモン」というリンクテキストを元にURLを抽出しています）
 
-### 3. レート制限の考慮
+### 3. ポケモンリストのフォーマット変更時
+参加できるポケモン一覧のHTML構造やJavaScript内の変数名などが変わった場合は、[scraper.ts](file:///home/wellk/project/pokemon-champions-reg/scraper.ts) 内の `fetchPokemonList` メソッド内の正規表現やJSON解析ロジックを調整してください。
+
+### 4. レート制限の考慮
 スクレイパーはループごとに `setTimeout` で1000ms（1秒）の間隔を空けています。対象サーバーに負荷をかけないよう、このウェイトは削除しないでください。

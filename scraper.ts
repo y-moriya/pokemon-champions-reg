@@ -1,7 +1,7 @@
 // ポケモンチャンピオンズ ランクバトルお知らせ収集 - スクレイパークラス
 
 import { DOMParser } from "@b-fuze/deno-dom";
-import type { NewsListItem, NewsListData, RankBattleNews } from "./types.ts";
+import type { NewsListItem, NewsListData, RankBattleNews, PokemonInfo } from "./types.ts";
 import { LIST_JSON_URL, BASE_URL } from "./constants.ts";
 
 export class PokemonChampionsScraper {
@@ -47,7 +47,8 @@ export class PokemonChampionsScraper {
   // ランクバトルのお知らせのみをフィルタリング
   filterRankBattleNews(newsList: NewsListItem[]): NewsListItem[] {
     // ポケモンチャンピオンズではタイトルが「「ランクバトル シーズンM-N」開催中！」などの形式
-    const titlePattern = /^「ランクバトル シーズン(?:[A-Z]-)?\d+」開催中！$/;
+    // ※スペースが含まれることがあるため \s* を追加
+    const titlePattern = /^「ランクバトル シーズン(?:[A-Z]-)?\d+」\s*開催中！$/;
     
     const filtered = newsList.filter((item) => {
       const isRankBattle = item.kindTxt === "ランクバトル" && 
@@ -81,6 +82,31 @@ export class PokemonChampionsScraper {
     return null;
   }
 
+  // 開催期間を抽出（例: "2026年5月13日（水）～6月17日（水）10:59"）
+  private extractDates(text: string): { startAt: string; endAt: string } | null {
+    const regex = /(\d{4})年(\d{1,2})月(\d{1,2})日（[^）]+）～(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日（[^）]+）(\d{1,2}):(\d{2})/;
+    const match = text.match(regex);
+    
+    if (match) {
+      const startYear = match[1];
+      const startMonth = match[2].padStart(2, '0');
+      const startDay = match[3].padStart(2, '0');
+      
+      const endYear = match[4] || startYear;
+      const endMonth = match[5].padStart(2, '0');
+      const endDay = match[6].padStart(2, '0');
+      const endHour = match[7].padStart(2, '0');
+      const endMinute = match[8].padStart(2, '0');
+      
+      return {
+        startAt: `${startYear}-${startMonth}-${startDay}`,
+        endAt: `${endYear}-${endMonth}-${endDay}T${endHour}:${endMinute}:00`
+      };
+    }
+    
+    return null;
+  }
+
   // 個別ページから情報を抽出
   async extractPageContent(newsItem: NewsListItem): Promise<RankBattleNews | null> {
     const url = `${BASE_URL}/${newsItem.link}`;
@@ -103,9 +129,10 @@ export class PokemonChampionsScraper {
       const mainTextElement = doc.querySelector("div.article-body") || doc.querySelector("article") || doc.querySelector("div.main-text");
       const mainText = mainTextElement?.textContent || "";
 
-      // シーズンとレギュレーションを抽出
+      // シーズン、レギュレーション、開催期間を抽出
       const season = this.extractSeason(mainText);
       const regulation = this.extractRegulation(mainText);
+      const dates = this.extractDates(mainText);
 
       // シーズンまたはレギュレーションが取得できない場合はスキップ
       if (season === null || regulation === null) {
@@ -113,19 +140,74 @@ export class PokemonChampionsScraper {
         return null;
       }
 
+      // 「参加できるポケモン」のリンクを取得
+      const pokemonLinkElement = Array.from(doc.querySelectorAll("a")).find(
+        (el) => el.textContent?.trim() === "参加できるポケモン"
+      );
+      let pokemonLink: string | undefined = undefined;
+      if (pokemonLinkElement) {
+        const href = pokemonLinkElement.getAttribute("href");
+        if (href) {
+          pokemonLink = href.startsWith("http") ? href : new URL(href, url).href;
+        }
+      }
+
       console.log(`  → シーズン: ${season}, レギュレーション: ${regulation}`);
+      if (dates) {
+        console.log(`  → 開催期間: ${dates.startAt} ～ ${dates.endAt}`);
+      }
+      if (pokemonLink) {
+        console.log(`  → ポケモンリストURL: ${pokemonLink}`);
+      }
 
       return {
         url,
         title: newsItem.title,
         season,
         regulation,
+        pokemonLink,
+        startAt: dates?.startAt,
+        endAt: dates?.endAt,
         fetchedAt: new Date().toISOString(),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`❌ 個別ページの取得に失敗: ${message}`);
       return null;
+    }
+  }
+
+  // ポケモンリストページからポケモン一覧を取得
+  async fetchPokemonList(url: string): Promise<PokemonInfo[]> {
+    console.log(`  🔍 ポケモンリストを取得中: ${url}`);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const html = await response.text();
+      const match = html.match(/const pokemons\s*=\s*(\[[\s\S]*?\]);/);
+      if (!match) {
+        throw new Error("HTMLから pokemons 変数が見つかりませんでした");
+      }
+
+      const rawList = JSON.parse(match[1]);
+      const pokemonList: PokemonInfo[] = [];
+      for (const item of rawList) {
+        if (Array.isArray(item) && item.length >= 2) {
+          const id = item[0];
+          const name = item.length >= 3 ? item[2] : item[1];
+          if (typeof id === "string" && typeof name === "string") {
+            pokemonList.push({ id, name });
+          }
+        }
+      }
+      return pokemonList;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`  ❌ ポケモンリストの取得に失敗: ${message}`);
+      return [];
     }
   }
 
@@ -158,15 +240,56 @@ export class PokemonChampionsScraper {
 
       // 既に取得済みかチェック
       if (await this.isAlreadyFetched(url)) {
-        console.log(`⏭️  スキップ（取得済み）: ${newsItem.title}`);
-        skipCount++;
+        const existingNews = (await this.kv.get<RankBattleNews>(["news", url])).value;
+        const hasPokemonLink = existingNews && existingNews.pokemonLink;
+        const hasDates = existingNews && existingNews.startAt && existingNews.endAt;
+        
+        let hasPokemonList = false;
+        if (existingNews && existingNews.regulation) {
+          const pokemonListCheck = await this.kv.get<PokemonInfo[]>(["regulation_pokemon", existingNews.regulation]);
+          hasPokemonList = pokemonListCheck.value !== null;
+        }
+
+        // すでに取得済みで、かつポケモンリスト、リンク、開催期間がすべて保存されている場合は完全にスキップする
+        if (hasPokemonList && hasPokemonLink && hasDates) {
+          console.log(`⏭️  スキップ（取得済み）: ${newsItem.title}`);
+          skipCount++;
+          continue;
+        }
+
+        // 情報が不足している場合は再取得して補完する
+        console.log(`🔄 補完処理（情報不足のため再取得）: ${newsItem.title}`);
+        const news = await this.extractPageContent(newsItem);
+        if (news) {
+          await this.saveNews(news);
+          if (news.pokemonLink) {
+            const pokemonList = await this.fetchPokemonList(news.pokemonLink);
+            if (pokemonList.length > 0) {
+              await this.kv.set(["regulation_pokemon", news.regulation], pokemonList);
+              console.log(`  ✓ レギュレーション ${news.regulation} のポケモンリスト（${pokemonList.length}件）を保存しました`);
+            }
+          }
+          newCount++;
+        } else {
+          invalidCount++;
+        }
+
+        // レート制限対策
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
       }
 
-      // 個別ページから情報を抽出
+      // 新規のお知らせ
       const news = await this.extractPageContent(newsItem);
       if (news) {
         await this.saveNews(news);
+        if (news.pokemonLink) {
+          const pokemonList = await this.fetchPokemonList(news.pokemonLink);
+          if (pokemonList.length > 0) {
+            await this.kv.set(["regulation_pokemon", news.regulation], pokemonList);
+            console.log(`  ✓ レギュレーション ${news.regulation} のポケモンリスト（${pokemonList.length}件）を保存しました`);
+          }
+        }
         newCount++;
       } else {
         invalidCount++;
@@ -178,7 +301,7 @@ export class PokemonChampionsScraper {
 
     console.log("\n" + "=".repeat(50));
     console.log(`✅ 収集完了`);
-    console.log(`   新規取得: ${newCount}件`);
+    console.log(`   新規取得/補完: ${newCount}件`);
     console.log(`   スキップ（取得済み）: ${skipCount}件`);
     console.log(`   スキップ（シーズン情報なし）: ${invalidCount}件`);
     console.log("=".repeat(50));
@@ -201,6 +324,16 @@ export class PokemonChampionsScraper {
       console.log(`   シーズン: ${news.season}`);
       console.log(`   レギュレーション: ${news.regulation}`);
       console.log(`   URL: ${news.url}`);
+      if (news.pokemonLink) {
+        console.log(`   ポケモンリストURL: ${news.pokemonLink}`);
+      }
+      if (news.startAt && news.endAt) {
+        console.log(`   開催期間: ${news.startAt} ～ ${news.endAt}`);
+      }
+      
+      const pokemonListCheck = await this.kv.get<PokemonInfo[]>(["regulation_pokemon", news.regulation]);
+      const pokemonCount = pokemonListCheck.value ? pokemonListCheck.value.length : 0;
+      console.log(`   参加可能ポケモン数: ${pokemonCount}`);
       console.log(`   取得日時: ${news.fetchedAt}\n`);
     }
 
@@ -233,16 +366,50 @@ export class PokemonChampionsScraper {
     console.log("\n✓ シーズン→レギュレーションマップを更新しました");
   }
 
-  // シーズン番号とレギュレーションの対応をJSON形式で出力
-  async outputJson(): Promise<void> {
-    const result = await this.kv.get<{ [key: string]: string }>(["season_regulation_map"]);
-    
-    if (result.value === null) {
-      console.error("シーズン→レギュレーションマップが見つかりません。先に 'scrape' を実行してください。");
-      Deno.exit(1);
+  // 全データを含んだ単一のJSONオブジェクトを生成
+  async generateAllDataJson(): Promise<unknown> {
+    // 1. シーズン情報の取得
+    const newsEntries = this.kv.list<RankBattleNews>({ prefix: ["news"] });
+    const seasonsList: RankBattleNews[] = [];
+    for await (const entry of newsEntries) {
+      seasonsList.push(entry.value);
+    }
+    // シーズン名でソート
+    seasonsList.sort((a, b) => a.season.localeCompare(b.season, undefined, { numeric: true, sensitivity: 'base' }));
+
+    const seasons = seasonsList.map(news => ({
+      season: news.season,
+      regulation: news.regulation,
+      startAt: news.startAt,
+      endAt: news.endAt,
+      url: news.url
+    }));
+
+    // 2. レギュレーション別ポケモンリストの取得
+    const pokemonEntries = this.kv.list<PokemonInfo[]>({ prefix: ["regulation_pokemon"] });
+    const regulations: { [key: string]: PokemonInfo[] } = {};
+    for await (const entry of pokemonEntries) {
+      const regulation = entry.key[1] as string;
+      regulations[regulation] = entry.value;
     }
 
-    console.log(JSON.stringify(result.value, null, 2));
+    return {
+      seasons,
+      regulations
+    };
+  }
+
+  // シーズン番号とレギュレーションの対応をJSON形式で出力
+  async outputJson(): Promise<void> {
+    const data = await this.generateAllDataJson();
+    console.log(JSON.stringify(data, null, 2));
+  }
+
+  // SHA1ハッシュを計算するヘルパー
+  private async calculateSha1(bytes: Uint8Array): Promise<string> {
+    const hashBuffer = await crypto.subtle.digest("SHA-1", bytes);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
   // NetlifyにJSONをアップロード
@@ -260,34 +427,32 @@ export class PokemonChampionsScraper {
       Deno.exit(1);
     }
 
-    // シーズン→レギュレーションマップを取得
-    const result = await this.kv.get<{ [key: string]: string }>(["season_regulation_map"]);
-    
-    if (result.value === null) {
-      console.error("シーズン→レギュレーションマップが見つかりません。先に 'scrape' を実行してください。");
-      Deno.exit(1);
-    }
+    const filesToUpload: { [path: string]: { bytes: Uint8Array, sha1: string } } = {};
 
-    // JSONを整形して文字列化
-    const jsonString = JSON.stringify(result.value, null, 2);
+    // 1. map.json の準備 (全部入りJSON)
+    const allData = await this.generateAllDataJson();
+    const jsonString = JSON.stringify(allData, null, 2);
     const jsonBytes = new TextEncoder().encode(jsonString);
-
-    // SHA1ハッシュを計算
-    const hashBuffer = await crypto.subtle.digest("SHA-1", jsonBytes);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const sha1 = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    const sha1 = await this.calculateSha1(jsonBytes);
+    filesToUpload["/map.json"] = { bytes: jsonBytes, sha1 };
 
     console.log(`\n📦 Netlifyへのデプロイを開始します`);
     console.log(`  サイトID: ${siteId}`);
-    console.log(`  ファイル: map.json`);
-    console.log(`  SHA1: ${sha1}`);
+    console.log("  対象ファイル一覧:");
+    for (const [path, info] of Object.entries(filesToUpload)) {
+      console.log(`    - ${path} (SHA1: ${info.sha1})`);
+    }
+
+    // デプロイ用ペイロードの作成
+    const deployFiles: { [path: string]: string } = {};
+    for (const [path, info] of Object.entries(filesToUpload)) {
+      deployFiles[path] = info.sha1;
+    }
 
     // ステップ1: デプロイを作成してファイルダイジェストを送信
     const deployUrl = `https://api.netlify.com/api/v1/sites/${siteId}/deploys`;
     const deployPayload = {
-      files: {
-        "/map.json": sha1
-      }
+      files: deployFiles
     };
 
     console.log(`\n🚀 デプロイを作成中...`);
@@ -315,29 +480,31 @@ export class PokemonChampionsScraper {
     console.log(`  必要なファイル: ${required.length}件`);
 
     // ステップ2: 必要なファイルをアップロード
-    if (required.includes(sha1)) {
-      console.log(`\n📤 ファイルをアップロード中...`);
-      const uploadUrl = `https://api.netlify.com/api/v1/deploys/${deployId}/files/map.json`;
-      
-      const uploadResponse = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Content-Type": "application/octet-stream"
-        },
-        body: jsonBytes
-      });
+    for (const [path, info] of Object.entries(filesToUpload)) {
+      if (required.includes(info.sha1)) {
+        console.log(`\n📤 ファイルをアップロード中: ${path}...`);
+        const uploadUrl = `https://api.netlify.com/api/v1/deploys/${deployId}/files${path}`;
+        
+        const uploadResponse = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Authorization": `Bearer ${accessToken}`,
+            "Content-Type": "application/octet-stream"
+          },
+          body: info.bytes
+        });
 
-      if (!uploadResponse.ok) {
-        const errorText = await uploadResponse.text();
-        console.error(`❌ ファイルのアップロードに失敗: ${uploadResponse.status} ${uploadResponse.statusText}`);
-        console.error(errorText);
-        Deno.exit(1);
+        if (!uploadResponse.ok) {
+          const errorText = await uploadResponse.text();
+          console.error(`❌ ファイルのアップロードに失敗: ${path} (${uploadResponse.status} ${uploadResponse.statusText})`);
+          console.error(errorText);
+          Deno.exit(1);
+        }
+
+        console.log(`  ✓ アップロード完了`);
+      } else {
+        console.log(`  ℹ️  アップロード省略（変更なし）: ${path}`);
       }
-
-      console.log(`  ✓ ファイルをアップロードしました`);
-    } else {
-      console.log(`  ℹ️  ファイルは既にアップロード済みです`);
     }
 
     console.log(`\n✅ デプロイが完了しました！`);

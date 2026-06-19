@@ -25,5 +25,14 @@ export interface RankBattleNews {
   title: string;
   season: string;
   regulation: string;
+  pokemonLink?: string;
+  startAt?: string;
+  endAt?: string;
   fetchedAt: string;
 }
+
+export interface PokemonInfo {
+  id: string;
+  name: string;
+}
+
