@@ -385,12 +385,23 @@ export class PokemonChampionsScraper {
       url: news.url
     }));
 
+    // レギュレーション名 -> ポケモンリストURL のマップを作成
+    const regulationUrlMap: { [key: string]: string } = {};
+    for (const news of seasonsList) {
+      if (news.regulation && news.pokemonLink) {
+        regulationUrlMap[news.regulation] = news.pokemonLink;
+      }
+    }
+
     // 2. レギュレーション別ポケモンリストの取得
     const pokemonEntries = this.kv.list<PokemonInfo[]>({ prefix: ["regulation_pokemon"] });
-    const regulations: { [key: string]: PokemonInfo[] } = {};
+    const regulations: { [key: string]: { url: string, pokemons: PokemonInfo[] } } = {};
     for await (const entry of pokemonEntries) {
       const regulation = entry.key[1] as string;
-      regulations[regulation] = entry.value;
+      regulations[regulation] = {
+        url: regulationUrlMap[regulation] || "",
+        pokemons: entry.value
+      };
     }
 
     return {

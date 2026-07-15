@@ -149,9 +149,20 @@ app.get("/api/pokemon/:regulation", async (c) => {
       );
     }
 
+    // レギュレーションのソースURLを探す
+    let url = "";
+    const newsEntries = kv.list<RankBattleNews>({ prefix: ["news"] });
+    for await (const entry of newsEntries) {
+      if (entry.value.regulation === regulation && entry.value.pokemonLink) {
+        url = entry.value.pokemonLink;
+        break;
+      }
+    }
+
     return c.json({
       success: true,
       regulation,
+      url,
       count: result.value.length,
       data: result.value,
     });
@@ -174,12 +185,24 @@ app.get("/api/pokemon", async (c) => {
   const kv = await Deno.openKv();
 
   try {
+    // レギュレーション名 -> url のマップを作成
+    const regulationUrlMap: { [key: string]: string } = {};
+    const newsEntries = kv.list<RankBattleNews>({ prefix: ["news"] });
+    for await (const entry of newsEntries) {
+      if (entry.value.regulation && entry.value.pokemonLink) {
+        regulationUrlMap[entry.value.regulation] = entry.value.pokemonLink;
+      }
+    }
+
     const entries = kv.list<PokemonInfo[]>({ prefix: ["regulation_pokemon"] });
-    const result: { [key: string]: PokemonInfo[] } = {};
+    const result: { [key: string]: { url: string, pokemons: PokemonInfo[] } } = {};
 
     for await (const entry of entries) {
       const regulation = entry.key[1] as string;
-      result[regulation] = entry.value;
+      result[regulation] = {
+        url: regulationUrlMap[regulation] || "",
+        pokemons: entry.value
+      };
     }
 
     return c.json({
