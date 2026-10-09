@@ -22,6 +22,7 @@ app.get("/", (c) => {
   return c.json({
     message: "ポケモンチャンピオンズ ランクバトルお知らせ収集API (Cloudflare Workers)",
     endpoints: {
+      "GET /map.json": "Netlify互換の単一map.json取得 (直接JSON)",
       "POST /api/scrape": "スクレイピング実行",
       "GET /api/list": "保存済みニュース一覧取得",
       "GET /api/json": "すべての情報をまとめた単一JSON取得",
@@ -116,6 +117,36 @@ app.get("/api/list", async (c) => {
     return c.json(
       {
         success: false,
+        error: message,
+      },
+      500
+    );
+  } finally {
+    if (c.executionCtx) {
+      c.executionCtx.waitUntil(logger.flush());
+    } else {
+      await logger.flush();
+    }
+  }
+});
+
+// Netlify互換: 単一 map.json 取得エンドポイント (生のJSONオブジェクトを直接返す)
+app.get("/map.json", async (c) => {
+  const scraper = new PokemonChampionsScraper(c.env.KV, c.env);
+
+  try {
+    const cached = await c.env.KV.get("all_data");
+    if (cached) {
+      return c.json(JSON.parse(cached));
+    }
+
+    const allData = await scraper.generateAllDataJson();
+    return c.json(allData);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error("map.jsonデータの取得に失敗しました", error);
+    return c.json(
+      {
         error: message,
       },
       500
@@ -338,6 +369,11 @@ export default {
     const scraper = new PokemonChampionsScraper(env.KV, env);
     try {
       await scraper.scrapeAll();
+      if (env.NETLIFY_SITE_ID && env.NETLIFY_ACCESS_TOKEN) {
+        logger.info("Netlifyへの自動同期デプロイを開始します");
+        await scraper.deployToNetlify();
+        logger.info("Netlifyへの自動同期デプロイが完了しました");
+      }
       logger.info("定期スクレイピングが完了しました");
     } catch (error) {
       logger.error("定期スクレイピング中にエラーが発生しました", error);
