@@ -1,47 +1,55 @@
 // ポケモンチャンピオンズ ランクバトルお知らせ収集スクリプト (CLI版)
-// 実行方法: deno run --allow-net --allow-read --allow-write --unstable-kv main.ts
+// 実行方法: pnpm run cli [scrape|list|json|deploy]
 
-import "@std/dotenv/load";
-import { PokemonChampionsScraper } from "./scraper.ts";
+import "dotenv/config";
 import { logger } from "./logger.ts";
 
-// メイン処理
+const API_BASE_URL =
+  process.env.API_BASE_URL ||
+  "https://pokemon-champions-reg.gunjobiyori.com";
+
 async function main() {
-  const kv = await Deno.openKv();
-  const scraper = new PokemonChampionsScraper(kv);
-  const command = Deno.args[0] || "scrape";
+  const command = process.argv[2] || "json";
 
   try {
-    logger.info(`CLIコマンドの実行を開始: ${command}`, { command });
+    logger.info(`CLIコマンドの実行を開始: ${command}`, { command, target: API_BASE_URL });
 
     switch (command) {
-      case "scrape":
-        // ランクバトルお知らせを収集
-        await scraper.scrapeAll();
+      case "scrape": {
+        const res = await fetch(`${API_BASE_URL}/api/scrape`, { method: "POST" });
+        const json = await res.json();
+        console.log(JSON.stringify(json, null, 2));
         break;
+      }
 
-      case "list":
-        // 保存済みのニュース一覧を表示
-        await scraper.listSavedNews();
+      case "list": {
+        const res = await fetch(`${API_BASE_URL}/api/list`);
+        const json = await res.json();
+        console.log(JSON.stringify(json, null, 2));
         break;
+      }
 
-      case "json":
-        // シーズン番号とレギュレーションをJSON形式で出力
-        await scraper.outputJson();
+      case "json": {
+        const res = await fetch(`${API_BASE_URL}/api/json`);
+        const json = await res.json();
+        console.log(JSON.stringify(json, null, 2));
         break;
+      }
 
-      case "deploy":
-        // NetlifyにJSONをデプロイ
-        await scraper.deployToNetlify();
+      case "deploy": {
+        const res = await fetch(`${API_BASE_URL}/api/deploy`, { method: "POST" });
+        const json = await res.json();
+        console.log(JSON.stringify(json, null, 2));
         break;
+      }
 
       default:
         logger.warn(`未知のコマンドが指定されました: ${command}`, { command });
         console.log("使用方法:");
-        console.log("  deno run --allow-net --allow-read --allow-write --unstable-kv main.ts scrape");
-        console.log("  deno run --allow-net --allow-read --allow-write --unstable-kv main.ts list");
-        console.log("  deno run --allow-net --allow-read --allow-write --unstable-kv main.ts json");
-        console.log("  deno run --allow-net --allow-read --allow-write --allow-env --unstable-kv main.ts deploy");
+        console.log("  pnpm run cli scrape");
+        console.log("  pnpm run cli list");
+        console.log("  pnpm run cli json");
+        console.log("  pnpm run cli deploy");
     }
 
     logger.info(`CLIコマンドが完了しました: ${command}`, { command });
@@ -49,15 +57,10 @@ async function main() {
     logger.error(`CLIコマンド実行中にエラーが発生しました: ${command}`, error, { command });
     throw error;
   } finally {
-    kv.close();
     await logger.flush();
   }
 }
 
-if (import.meta.main) {
-  try {
-    await main();
-  } catch (_error) {
-    Deno.exit(1);
-  }
-}
+main().catch(() => {
+  process.exit(1);
+});

@@ -1,4 +1,4 @@
-// 共通ロガーモジュール (Axiom Ingest API 対応)
+// 共通ロガーモジュール (Axiom Ingest API 対応 - Node / Cloudflare Workers / Deno 互換)
 
 export interface LogEvent {
   _time: string;
@@ -23,16 +23,45 @@ export class Logger {
   private queue: LogEvent[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private options?: LoggerOptions;
+  private dynamicEnv: { AXIOM_TOKEN?: string; AXIOM_DATASET?: string } = {};
 
   constructor(appName: string, options?: LoggerOptions) {
     this.appName = appName;
     this.options = options;
   }
 
+  /**
+   * Cloudflare Workers 等でリクエスト毎の環境変数を動的に注入
+   */
+  setEnv(env: { AXIOM_TOKEN?: string; AXIOM_DATASET?: string }): void {
+    if (env.AXIOM_TOKEN) {
+      this.dynamicEnv.AXIOM_TOKEN = env.AXIOM_TOKEN;
+    }
+    if (env.AXIOM_DATASET) {
+      this.dynamicEnv.AXIOM_DATASET = env.AXIOM_DATASET;
+    }
+  }
+
   private getEnv(key: string): string | undefined {
     try {
-      if (typeof Deno !== "undefined" && typeof Deno.env?.get === "function") {
-        return Deno.env.get(key);
+      // 1. dynamicEnv から探す
+      if (key === "AXIOM_TOKEN" && this.dynamicEnv.AXIOM_TOKEN) {
+        return this.dynamicEnv.AXIOM_TOKEN;
+      }
+      if (key === "AXIOM_DATASET" && this.dynamicEnv.AXIOM_DATASET) {
+        return this.dynamicEnv.AXIOM_DATASET;
+      }
+
+      // 2. Node.js process.env
+      if (typeof process !== "undefined" && process?.env?.[key]) {
+        return process.env[key];
+      }
+
+      // 3. Deno.env
+      // deno-lint-ignore no-explicit-any
+      const denoObj = (globalThis as unknown as { Deno?: { env?: { get: (k: string) => string | undefined } } }).Deno;
+      if (typeof denoObj !== "undefined" && typeof denoObj.env?.get === "function") {
+        return denoObj.env.get(key);
       }
     } catch {
       // 権限がない場合等は安全にフォールバック
@@ -193,11 +222,11 @@ export class Logger {
       });
     }, interval);
 
-    // プロセス終了をブロックしないように unrefTimer を呼ぶ
+    // プロセス終了をブロックしないように unref を呼ぶ
     try {
-      const timerId = this.timer;
-      if (timerId !== null && typeof Deno !== "undefined" && typeof Deno.unrefTimer === "function") {
-        Deno.unrefTimer(timerId);
+      const timerId = this.timer as unknown as { unref?: () => void };
+      if (timerId && typeof timerId.unref === "function") {
+        timerId.unref();
       }
     } catch {
       // ignore

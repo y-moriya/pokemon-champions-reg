@@ -36,3 +36,11 @@ export interface PokemonInfo {
   name: string;
 }
 
+export interface Env {
+  KV: KVNamespace;
+  AXIOM_DATASET?: string;
+  AXIOM_TOKEN?: string;
+  NETLIFY_SITE_ID?: string;
+  NETLIFY_ACCESS_TOKEN?: string;
+  PORT?: string;
+}

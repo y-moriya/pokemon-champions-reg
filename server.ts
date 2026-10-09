@@ -1,45 +1,50 @@
-// ポケモンチャンピオンズ ランクバトルお知らせ収集サーバー (Hono版)
-// 実行方法: deno run --allow-net --allow-read --allow-write --allow-env --unstable-kv server.ts
+// ポケモンチャンピオンズ ランクバトルお知らせ収集サーバー (Cloudflare Workers / Hono)
 
 import { Hono } from "hono";
-import "@std/dotenv/load";
+import { cors } from "hono/cors";
+import type { Env, RankBattleNews, PokemonInfo } from "./types.ts";
 import { PokemonChampionsScraper } from "./scraper.ts";
-import type { RankBattleNews, PokemonInfo } from "./types.ts";
 import { logger } from "./logger.ts";
 
-const app = new Hono();
+const app = new Hono<{ Bindings: Env }>();
+
+// CORS設定
+app.use("*", cors());
+
+// ミドルウェア: 環境変数をロガーに設定
+app.use("*", async (c, next) => {
+  logger.setEnv(c.env);
+  await next();
+});
 
 // ルートエンドポイント
 app.get("/", (c) => {
   return c.json({
-    message: "ポケモンチャンピオンズ ランクバトルお知らせ収集API",
+    message: "ポケモンチャンピオンズ ランクバトルお知らせ収集API (Cloudflare Workers)",
     endpoints: {
       "POST /api/scrape": "スクレイピング実行",
       "GET /api/list": "保存済みニュース一覧取得",
       "GET /api/json": "すべての情報をまとめた単一JSON取得",
       "GET /api/pokemon": "すべてのレギュレーション of ポケモンリスト取得",
       "GET /api/pokemon/:regulation": "指定レギュレーションのポケモンリスト取得",
-      "POST /api/deploy": "NetlifyへのデプロイStarサーバーを実行",
+      "POST /api/deploy": "Netlifyへのデプロイを実行",
     },
   });
 });
 
 // スクレイピング実行エンドポイント
 app.post("/api/scrape", async (c) => {
-  const kv = await Deno.openKv();
-  const scraper = new PokemonChampionsScraper(kv);
+  const scraper = new PokemonChampionsScraper(c.env.KV, c.env);
 
   try {
     logger.info("スクレイピング処理を開始します");
 
-    // コンソール出力をキャプチャするための配列
     const logs: string[] = [];
     const originalLog = console.log;
     const originalInfo = console.info;
     const originalWarn = console.warn;
     const originalError = console.error;
 
-    // コンソールメソッドをオーバーライドしてログをキャプチャ
     console.log = (...args: unknown[]) => {
       logs.push(args.join(" "));
       originalLog(...args);
@@ -60,7 +65,6 @@ app.post("/api/scrape", async (c) => {
     try {
       await scraper.scrapeAll();
     } finally {
-      // 元に戻す
       console.log = originalLog;
       console.info = originalInfo;
       console.warn = originalWarn;
@@ -85,26 +89,20 @@ app.post("/api/scrape", async (c) => {
       500
     );
   } finally {
-    kv.close();
-    await logger.flush();
+    if (c.executionCtx) {
+      c.executionCtx.waitUntil(logger.flush());
+    } else {
+      await logger.flush();
+    }
   }
 });
 
 // 保存済みニュース一覧取得エンドポイント
 app.get("/api/list", async (c) => {
-  const kv = await Deno.openKv();
+  const scraper = new PokemonChampionsScraper(c.env.KV, c.env);
 
   try {
-    const entries = kv.list<RankBattleNews>({ prefix: ["news"] });
-    const newsList: RankBattleNews[] = [];
-
-    for await (const entry of entries) {
-      newsList.push(entry.value);
-    }
-
-    // シーズン名でソート（自然順ソート）
-    newsList.sort((a, b) => a.season.localeCompare(b.season, undefined, { numeric: true, sensitivity: 'base' }));
-
+    const newsList = await scraper.getAllSavedNews();
     logger.info("保存済みニュース一覧を取得しました", { count: newsList.length });
 
     return c.json({
@@ -123,19 +121,31 @@ app.get("/api/list", async (c) => {
       500
     );
   } finally {
-    kv.close();
-    await logger.flush();
+    if (c.executionCtx) {
+      c.executionCtx.waitUntil(logger.flush());
+    } else {
+      await logger.flush();
+    }
   }
 });
 
 // すべての情報をまとめた単一JSON取得エンドポイント
 app.get("/api/json", async (c) => {
-  const kv = await Deno.openKv();
-  const scraper = new PokemonChampionsScraper(kv);
+  const scraper = new PokemonChampionsScraper(c.env.KV, c.env);
 
   try {
+    // キャッシュをチェック
+    const cached = await c.env.KV.get("all_data");
+    if (cached) {
+      logger.info("キャッシュから単一JSONデータを取得しました");
+      return c.json({
+        success: true,
+        data: JSON.parse(cached),
+      });
+    }
+
     const allData = await scraper.generateAllDataJson();
-    logger.info("単一JSONデータを取得しました");
+    logger.info("単一JSONデータを生成・取得しました");
     return c.json({
       success: true,
       data: allData,
@@ -151,23 +161,22 @@ app.get("/api/json", async (c) => {
       500
     );
   } finally {
-    kv.close();
-    await logger.flush();
+    if (c.executionCtx) {
+      c.executionCtx.waitUntil(logger.flush());
+    } else {
+      await logger.flush();
+    }
   }
 });
 
 // レギュレーションごとのポケモンリスト取得エンドポイント
 app.get("/api/pokemon/:regulation", async (c) => {
   const regulation = c.req.param("regulation");
-  const kv = await Deno.openKv();
 
   try {
-    const result = await kv.get<PokemonInfo[]>([
-      "regulation_pokemon",
-      regulation,
-    ]);
+    const pokemonsRaw = await c.env.KV.get(`regulation_pokemon:${regulation}`);
 
-    if (result.value === null) {
+    if (pokemonsRaw === null) {
       logger.warn(`レギュレーション ${regulation} のポケモンリストが見つかりません`, { regulation });
       return c.json(
         {
@@ -178,27 +187,30 @@ app.get("/api/pokemon/:regulation", async (c) => {
       );
     }
 
-    // レギュレーションのソースURLを探す
+    const pokemons: PokemonInfo[] = JSON.parse(pokemonsRaw);
+
+    // ソースURLの取得
     let url = "";
-    const newsEntries = kv.list<RankBattleNews>({ prefix: ["news"] });
-    for await (const entry of newsEntries) {
-      if (entry.value.regulation === regulation && entry.value.pokemonLink) {
-        url = entry.value.pokemonLink;
+    const scraper = new PokemonChampionsScraper(c.env.KV, c.env);
+    const newsList = await scraper.getAllSavedNews();
+    for (const item of newsList) {
+      if (item.regulation === regulation && item.pokemonLink) {
+        url = item.pokemonLink;
         break;
       }
     }
 
     logger.info(`レギュレーション ${regulation} のポケモンリストを取得しました`, {
       regulation,
-      count: result.value.length,
+      count: pokemons.length,
     });
 
     return c.json({
       success: true,
       regulation,
       url,
-      count: result.value.length,
-      data: result.value,
+      count: pokemons.length,
+      data: pokemons,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -211,43 +223,27 @@ app.get("/api/pokemon/:regulation", async (c) => {
       500
     );
   } finally {
-    kv.close();
-    await logger.flush();
+    if (c.executionCtx) {
+      c.executionCtx.waitUntil(logger.flush());
+    } else {
+      await logger.flush();
+    }
   }
 });
 
 // すべてのレギュレーションのポケモンリスト取得エンドポイント
 app.get("/api/pokemon", async (c) => {
-  const kv = await Deno.openKv();
-
   try {
-    // レギュレーション名 -> url のマップを作成
-    const regulationUrlMap: { [key: string]: string } = {};
-    const newsEntries = kv.list<RankBattleNews>({ prefix: ["news"] });
-    for await (const entry of newsEntries) {
-      if (entry.value.regulation && entry.value.pokemonLink) {
-        regulationUrlMap[entry.value.regulation] = entry.value.pokemonLink;
-      }
-    }
-
-    const entries = kv.list<PokemonInfo[]>({ prefix: ["regulation_pokemon"] });
-    const result: { [key: string]: { url: string, pokemons: PokemonInfo[] } } = {};
-
-    for await (const entry of entries) {
-      const regulation = entry.key[1] as string;
-      result[regulation] = {
-        url: regulationUrlMap[regulation] || "",
-        pokemons: entry.value
-      };
-    }
+    const scraper = new PokemonChampionsScraper(c.env.KV, c.env);
+    const allData = await scraper.generateAllDataJson();
 
     logger.info("全レギュレーションのポケモンリストを取得しました", {
-      regulationsCount: Object.keys(result).length,
+      regulationsCount: Object.keys(allData.regulations).length,
     });
 
     return c.json({
       success: true,
-      data: result,
+      data: allData.regulations,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -260,27 +256,27 @@ app.get("/api/pokemon", async (c) => {
       500
     );
   } finally {
-    kv.close();
-    await logger.flush();
+    if (c.executionCtx) {
+      c.executionCtx.waitUntil(logger.flush());
+    } else {
+      await logger.flush();
+    }
   }
 });
 
 // Netlifyデプロイエンドポイント
 app.post("/api/deploy", async (c) => {
-  const kv = await Deno.openKv();
-  const scraper = new PokemonChampionsScraper(kv);
+  const scraper = new PokemonChampionsScraper(c.env.KV, c.env);
 
   try {
     logger.info("Netlifyへのデプロイリクエストを受信しました");
 
-    // コンソール出力をキャプチャするための配列
     const logs: string[] = [];
     const originalLog = console.log;
     const originalInfo = console.info;
     const originalWarn = console.warn;
     const originalError = console.error;
 
-    // コンソールメソッドをオーバーライド
     console.log = (...args: unknown[]) => {
       logs.push(args.join(" "));
       originalLog(...args);
@@ -301,7 +297,6 @@ app.post("/api/deploy", async (c) => {
     try {
       await scraper.deployToNetlify();
     } finally {
-      // 元に戻す
       console.log = originalLog;
       console.info = originalInfo;
       console.warn = originalWarn;
@@ -326,13 +321,28 @@ app.post("/api/deploy", async (c) => {
       500
     );
   } finally {
-    kv.close();
-    await logger.flush();
+    if (c.executionCtx) {
+      c.executionCtx.waitUntil(logger.flush());
+    } else {
+      await logger.flush();
+    }
   }
 });
 
-// サーバー起動
-const port = parseInt(Deno.env.get("PORT") || "8000");
-logger.info(`🚀 サーバーを起動しています: http://localhost:${port}`, { port });
-
-Deno.serve({ port }, app.fetch);
+// Cloudflare Workers エクスポート（fetch & scheduled）
+export default {
+  fetch: app.fetch,
+  async scheduled(event: { cron: string }, env: Env, ctx: ExecutionContext) {
+    logger.setEnv(env);
+    logger.info("定期スクレイピング (Scheduled Cron) を開始します", { cron: event.cron });
+    const scraper = new PokemonChampionsScraper(env.KV, env);
+    try {
+      await scraper.scrapeAll();
+      logger.info("定期スクレイピングが完了しました");
+    } catch (error) {
+      logger.error("定期スクレイピング中にエラーが発生しました", error);
+    } finally {
+      ctx.waitUntil(logger.flush());
+    }
+  },
+};

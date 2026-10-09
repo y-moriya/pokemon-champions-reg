@@ -1,3 +1,5 @@
 .env
-# Local Netlify folder
+node_modules
+.wrangler
+.cloudflare
 .netlify

@@ -1,0 +1,18 @@
+name = "pokemon-champions-reg"
+main = "server.ts"
+compatibility_date = "2025-01-12"
+compatibility_flags = ["nodejs_compat"]
+
+routes = [
+  { pattern = "pokemon-champions-reg.gunjobiyori.com", custom_domain = true }
+]
+
+[[kv_namespaces]]
+binding = "KV"
+id = "68bdaa1d40624a1aaa6dc44af3524396"
+
+[vars]
+AXIOM_DATASET = "personal-apps"
+
+[triggers]
+crons = ["0 3 * * *"]
