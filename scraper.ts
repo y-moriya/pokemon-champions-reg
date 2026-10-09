@@ -3,6 +3,7 @@
 import { DOMParser } from "@b-fuze/deno-dom";
 import type { NewsListItem, NewsListData, RankBattleNews, PokemonInfo } from "./types.ts";
 import { LIST_JSON_URL, BASE_URL } from "./constants.ts";
+import { logger } from "./logger.ts";
 
 export class PokemonChampionsScraper {
   private kv: Deno.Kv;
@@ -20,12 +21,17 @@ export class PokemonChampionsScraper {
   // ニュースを保存
   async saveNews(news: RankBattleNews): Promise<void> {
     await this.kv.set(["news", news.url], news);
-    console.log(`✓ 保存しました: ${news.title}`);
+    logger.info(`保存しました: ${news.title}`, {
+      title: news.title,
+      url: news.url,
+      season: news.season,
+      regulation: news.regulation,
+    });
   }
 
   // JSONからお知らせ一覧を取得
   async fetchNewsList(): Promise<NewsListItem[]> {
-    console.log(`\n📄 お知らせ一覧JSONを取得中: ${LIST_JSON_URL}`);
+    logger.info(`お知らせ一覧JSONを取得中: ${LIST_JSON_URL}`, { url: LIST_JSON_URL });
 
     try {
       const response = await fetch(LIST_JSON_URL);
@@ -34,12 +40,12 @@ export class PokemonChampionsScraper {
       }
 
       const jsonData: NewsListData = await response.json();
-      console.log(`  → 合計 ${jsonData.data.length} 件のお知らせを取得`);
+      logger.info(`お知らせ一覧を取得完了: ${jsonData.data.length}件`, { count: jsonData.data.length });
 
       return jsonData.data;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`❌ お知らせ一覧の取得に失敗: ${message}`);
+      logger.error(`お知らせ一覧の取得に失敗: ${message}`, error, { url: LIST_JSON_URL });
       return [];
     }
   }
@@ -56,7 +62,10 @@ export class PokemonChampionsScraper {
       return isRankBattle && titlePattern.test(item.title);
     });
 
-    console.log(`\n🔍 フィルタリング結果: ${filtered.length}件のランクバトルシーズン告知を発見`);
+    logger.info(`フィルタリング結果: ${filtered.length}件のランクバトルシーズン告知を発見`, {
+      matchedCount: filtered.length,
+      totalCount: newsList.length,
+    });
     return filtered;
   }
 
@@ -110,8 +119,7 @@ export class PokemonChampionsScraper {
   // 個別ページから情報を抽出
   async extractPageContent(newsItem: NewsListItem): Promise<RankBattleNews | null> {
     const url = `${BASE_URL}/${newsItem.link}`;
-    console.log(`\n📖 個別ページを取得中: ${url}`);
-    console.log(`  タイトル: ${newsItem.title}`);
+    logger.info(`個別ページを取得中: ${url}`, { url, title: newsItem.title });
 
     try {
       const response = await fetch(url);
@@ -136,7 +144,7 @@ export class PokemonChampionsScraper {
 
       // シーズンまたはレギュレーションが取得できない場合はスキップ
       if (season === null || regulation === null) {
-        console.log(`  ⏭️  スキップ（シーズンまたはレギュレーションが見つかりません）`);
+        logger.warn(`スキップ（シーズンまたはレギュレーションが見つかりません）: ${newsItem.title}`, { url, title: newsItem.title });
         return null;
       }
 
@@ -152,13 +160,15 @@ export class PokemonChampionsScraper {
         }
       }
 
-      console.log(`  → シーズン: ${season}, レギュレーション: ${regulation}`);
-      if (dates) {
-        console.log(`  → 開催期間: ${dates.startAt} ～ ${dates.endAt}`);
-      }
-      if (pokemonLink) {
-        console.log(`  → ポケモンリストURL: ${pokemonLink}`);
-      }
+      logger.info(`個別ページの解析完了: ${newsItem.title}`, {
+        url,
+        title: newsItem.title,
+        season,
+        regulation,
+        startAt: dates?.startAt,
+        endAt: dates?.endAt,
+        pokemonLink,
+      });
 
       return {
         url,
@@ -172,14 +182,14 @@ export class PokemonChampionsScraper {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`❌ 個別ページの取得に失敗: ${message}`);
+      logger.error(`個別ページの取得に失敗: ${message}`, error, { url, title: newsItem.title });
       return null;
     }
   }
 
   // ポケモンリストページからポケモン一覧を取得
   async fetchPokemonList(url: string): Promise<PokemonInfo[]> {
-    console.log(`  🔍 ポケモンリストを取得中: ${url}`);
+    logger.info(`ポケモンリストを取得中: ${url}`, { url });
     try {
       const response = await fetch(url);
       if (!response.ok) {
@@ -206,14 +216,14 @@ export class PokemonChampionsScraper {
       return pokemonList;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`  ❌ ポケモンリストの取得に失敗: ${message}`);
+      logger.error(`ポケモンリストの取得に失敗: ${message}`, error, { url });
       return [];
     }
   }
 
   // すべてのランクバトルお知らせを収集
   async scrapeAll(): Promise<void> {
-    console.log("🚀 ランクバトルお知らせの収集を開始します\n");
+    logger.info("ランクバトルお知らせの収集を開始します");
 
     let newCount = 0;
     let skipCount = 0;
@@ -222,7 +232,7 @@ export class PokemonChampionsScraper {
     // JSONから一覧を取得
     const newsList = await this.fetchNewsList();
     if (newsList.length === 0) {
-      console.log("❌ お知らせ一覧の取得に失敗しました");
+      logger.error("お知らせ一覧の取得に失敗しました");
       return;
     }
 
@@ -230,7 +240,7 @@ export class PokemonChampionsScraper {
     const rankBattleNews = this.filterRankBattleNews(newsList);
 
     if (rankBattleNews.length === 0) {
-      console.log("ℹ️  該当するランクバトルシーズン告知が見つかりませんでした");
+      logger.warn("該当するランクバトルシーズン告知が見つかりませんでした");
       return;
     }
 
@@ -252,13 +262,13 @@ export class PokemonChampionsScraper {
 
         // すでに取得済みで、かつポケモンリスト、リンク、開催期間がすべて保存されている場合は完全にスキップする
         if (hasPokemonList && hasPokemonLink && hasDates) {
-          console.log(`⏭️  スキップ（取得済み）: ${newsItem.title}`);
+          logger.info(`スキップ（取得済み）: ${newsItem.title}`, { title: newsItem.title, url });
           skipCount++;
           continue;
         }
 
         // 情報が不足している場合は再取得して補完する
-        console.log(`🔄 補完処理（情報不足のため再取得）: ${newsItem.title}`);
+        logger.info(`補完処理（情報不足のため再取得）: ${newsItem.title}`, { title: newsItem.title, url });
         const news = await this.extractPageContent(newsItem);
         if (news) {
           await this.saveNews(news);
@@ -266,7 +276,10 @@ export class PokemonChampionsScraper {
             const pokemonList = await this.fetchPokemonList(news.pokemonLink);
             if (pokemonList.length > 0) {
               await this.kv.set(["regulation_pokemon", news.regulation], pokemonList);
-              console.log(`  ✓ レギュレーション ${news.regulation} のポケモンリスト（${pokemonList.length}件）を保存しました`);
+              logger.info(`レギュレーション ${news.regulation} のポケモンリスト（${pokemonList.length}件）を保存しました`, {
+                regulation: news.regulation,
+                count: pokemonList.length,
+              });
             }
           }
           newCount++;
@@ -287,7 +300,10 @@ export class PokemonChampionsScraper {
           const pokemonList = await this.fetchPokemonList(news.pokemonLink);
           if (pokemonList.length > 0) {
             await this.kv.set(["regulation_pokemon", news.regulation], pokemonList);
-            console.log(`  ✓ レギュレーション ${news.regulation} のポケモンリスト（${pokemonList.length}件）を保存しました`);
+            logger.info(`レギュレーション ${news.regulation} のポケモンリスト（${pokemonList.length}件）を保存しました`, {
+              regulation: news.regulation,
+              count: pokemonList.length,
+            });
           }
         }
         newCount++;
@@ -299,12 +315,11 @@ export class PokemonChampionsScraper {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
 
-    console.log("\n" + "=".repeat(50));
-    console.log(`✅ 収集完了`);
-    console.log(`   新規取得/補完: ${newCount}件`);
-    console.log(`   スキップ（取得済み）: ${skipCount}件`);
-    console.log(`   スキップ（シーズン情報なし）: ${invalidCount}件`);
-    console.log("=".repeat(50));
+    logger.info("収集完了", {
+      newCount,
+      skipCount,
+      invalidCount,
+    });
 
     // シーズン→レギュレーションマップを更新
     await this.updateSeasonRegulationMap();
@@ -312,7 +327,7 @@ export class PokemonChampionsScraper {
 
   // 保存済みのニュース一覧を表示
   async listSavedNews(): Promise<void> {
-    console.log("\n📚 保存済みのランクバトルお知らせ:\n");
+    logger.info("保存済みのランクバトルお知らせ一覧を表示します");
 
     const entries = this.kv.list<RankBattleNews>({ prefix: ["news"] });
     let count = 0;
@@ -320,25 +335,23 @@ export class PokemonChampionsScraper {
     for await (const entry of entries) {
       count++;
       const news = entry.value;
-      console.log(`${count}. ${news.title}`);
-      console.log(`   シーズン: ${news.season}`);
-      console.log(`   レギュレーション: ${news.regulation}`);
-      console.log(`   URL: ${news.url}`);
-      if (news.pokemonLink) {
-        console.log(`   ポケモンリストURL: ${news.pokemonLink}`);
-      }
-      if (news.startAt && news.endAt) {
-        console.log(`   開催期間: ${news.startAt} ～ ${news.endAt}`);
-      }
-      
       const pokemonListCheck = await this.kv.get<PokemonInfo[]>(["regulation_pokemon", news.regulation]);
       const pokemonCount = pokemonListCheck.value ? pokemonListCheck.value.length : 0;
-      console.log(`   参加可能ポケモン数: ${pokemonCount}`);
-      console.log(`   取得日時: ${news.fetchedAt}\n`);
+
+      logger.info(`[${count}] ${news.title}`, {
+        season: news.season,
+        regulation: news.regulation,
+        url: news.url,
+        pokemonLink: news.pokemonLink,
+        startAt: news.startAt,
+        endAt: news.endAt,
+        pokemonCount,
+        fetchedAt: news.fetchedAt,
+      });
     }
 
     if (count === 0) {
-      console.log("まだお知らせは保存されていません。");
+      logger.info("まだお知らせは保存されていません");
     }
   }
 
@@ -363,7 +376,7 @@ export class PokemonChampionsScraper {
 
     // KVに保存
     await this.kv.set(["season_regulation_map"], result);
-    console.log("\n✓ シーズン→レギュレーションマップを更新しました");
+    logger.info("シーズン→レギュレーションマップを更新しました", { count: Object.keys(result).length });
   }
 
   // 全データを含んだ単一のJSONオブジェクトを生成
@@ -418,7 +431,7 @@ export class PokemonChampionsScraper {
 
   // SHA1ハッシュを計算するヘルパー
   private async calculateSha1(bytes: Uint8Array): Promise<string> {
-    const hashBuffer = await crypto.subtle.digest("SHA-1", bytes);
+    const hashBuffer = await crypto.subtle.digest("SHA-1", bytes as unknown as BufferSource);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
@@ -426,7 +439,7 @@ export class PokemonChampionsScraper {
   // NetlifyにJSONをアップロード
   async deployToNetlify(): Promise<void> {
     // デプロイ前に最新のデータを取得
-    console.log("📥 デプロイ前に最新のデータを取得します\n");
+    logger.info("デプロイ前に最新のデータを取得します");
     await this.scrapeAll();
 
     // 環境変数から設定を取得
@@ -434,7 +447,8 @@ export class PokemonChampionsScraper {
     const accessToken = Deno.env.get("NETLIFY_ACCESS_TOKEN");
 
     if (!siteId || !accessToken) {
-      console.error("環境変数 NETLIFY_SITE_ID と NETLIFY_ACCESS_TOKEN を設定してください。");
+      logger.error("環境変数 NETLIFY_SITE_ID と NETLIFY_ACCESS_TOKEN を設定してください");
+      await logger.flush();
       Deno.exit(1);
     }
 
@@ -447,12 +461,11 @@ export class PokemonChampionsScraper {
     const sha1 = await this.calculateSha1(jsonBytes);
     filesToUpload["/map.json"] = { bytes: jsonBytes, sha1 };
 
-    console.log(`\n📦 Netlifyへのデプロイを開始します`);
-    console.log(`  サイトID: ${siteId}`);
-    console.log("  対象ファイル一覧:");
-    for (const [path, info] of Object.entries(filesToUpload)) {
-      console.log(`    - ${path} (SHA1: ${info.sha1})`);
-    }
+    logger.info("Netlifyへのデプロイを開始します", {
+      siteId,
+      filesCount: Object.keys(filesToUpload).length,
+      files: Object.keys(filesToUpload).map((path) => ({ path, sha1: filesToUpload[path].sha1 })),
+    });
 
     // デプロイ用ペイロードの作成
     const deployFiles: { [path: string]: string } = {};
@@ -466,7 +479,7 @@ export class PokemonChampionsScraper {
       files: deployFiles
     };
 
-    console.log(`\n🚀 デプロイを作成中...`);
+    logger.info("Netlifyデプロイを作成中...", { deployUrl });
     const deployResponse = await fetch(deployUrl, {
       method: "POST",
       headers: {
@@ -478,8 +491,12 @@ export class PokemonChampionsScraper {
 
     if (!deployResponse.ok) {
       const errorText = await deployResponse.text();
-      console.error(`❌ デプロイの作成に失敗: ${deployResponse.status} ${deployResponse.statusText}`);
-      console.error(errorText);
+      logger.error(`デプロイの作成に失敗: ${deployResponse.status} ${deployResponse.statusText}`, undefined, {
+        status: deployResponse.status,
+        statusText: deployResponse.statusText,
+        errorText,
+      });
+      await logger.flush();
       Deno.exit(1);
     }
 
@@ -487,13 +504,12 @@ export class PokemonChampionsScraper {
     const deployId = deployData.id;
     const required = deployData.required || [];
 
-    console.log(`  ✓ デプロイID: ${deployId}`);
-    console.log(`  必要なファイル: ${required.length}件`);
+    logger.info("デプロイを作成しました", { deployId, requiredFilesCount: required.length });
 
     // ステップ2: 必要なファイルをアップロード
     for (const [path, info] of Object.entries(filesToUpload)) {
       if (required.includes(info.sha1)) {
-        console.log(`\n📤 ファイルをアップロード中: ${path}...`);
+        logger.info(`ファイルをアップロード中: ${path}`, { path, sha1: info.sha1 });
         const uploadUrl = `https://api.netlify.com/api/v1/deploys/${deployId}/files${path}`;
         
         const uploadResponse = await fetch(uploadUrl, {
@@ -502,23 +518,31 @@ export class PokemonChampionsScraper {
             "Authorization": `Bearer ${accessToken}`,
             "Content-Type": "application/octet-stream"
           },
-          body: info.bytes
+          body: info.bytes as unknown as BodyInit
         });
 
         if (!uploadResponse.ok) {
           const errorText = await uploadResponse.text();
-          console.error(`❌ ファイルのアップロードに失敗: ${path} (${uploadResponse.status} ${uploadResponse.statusText})`);
-          console.error(errorText);
+          logger.error(`ファイルのアップロードに失敗: ${path} (${uploadResponse.status} ${uploadResponse.statusText})`, undefined, {
+            path,
+            status: uploadResponse.status,
+            statusText: uploadResponse.statusText,
+            errorText,
+          });
+          await logger.flush();
           Deno.exit(1);
         }
 
-        console.log(`  ✓ アップロード完了`);
+        logger.info(`アップロード完了: ${path}`, { path });
       } else {
-        console.log(`  ℹ️  アップロード省略（変更なし）: ${path}`);
+        logger.info(`アップロード省略（変更なし）: ${path}`, { path });
       }
     }
 
-    console.log(`\n✅ デプロイが完了しました！`);
-    console.log(`  デプロイURL: https://app.netlify.com/sites/${siteId}/deploys/${deployId}`);
+    logger.info("Netlifyへのデプロイが完了しました", {
+      siteId,
+      deployId,
+      deployUrl: `https://app.netlify.com/sites/${siteId}/deploys/${deployId}`,
+    });
   }
 }

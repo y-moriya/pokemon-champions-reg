@@ -3,15 +3,16 @@
 
 import "@std/dotenv/load";
 import { PokemonChampionsScraper } from "./scraper.ts";
+import { logger } from "./logger.ts";
 
 // メイン処理
 async function main() {
   const kv = await Deno.openKv();
   const scraper = new PokemonChampionsScraper(kv);
+  const command = Deno.args[0] || "scrape";
 
   try {
-    // 引数で動作を切り替え
-    const command = Deno.args[0] || "scrape";
+    logger.info(`CLIコマンドの実行を開始: ${command}`, { command });
 
     switch (command) {
       case "scrape":
@@ -35,17 +36,28 @@ async function main() {
         break;
 
       default:
+        logger.warn(`未知のコマンドが指定されました: ${command}`, { command });
         console.log("使用方法:");
         console.log("  deno run --allow-net --allow-read --allow-write --unstable-kv main.ts scrape");
         console.log("  deno run --allow-net --allow-read --allow-write --unstable-kv main.ts list");
         console.log("  deno run --allow-net --allow-read --allow-write --unstable-kv main.ts json");
         console.log("  deno run --allow-net --allow-read --allow-write --allow-env --unstable-kv main.ts deploy");
     }
+
+    logger.info(`CLIコマンドが完了しました: ${command}`, { command });
+  } catch (error) {
+    logger.error(`CLIコマンド実行中にエラーが発生しました: ${command}`, error, { command });
+    throw error;
   } finally {
     kv.close();
+    await logger.flush();
   }
 }
 
 if (import.meta.main) {
-  main();
+  try {
+    await main();
+  } catch (_error) {
+    Deno.exit(1);
+  }
 }

@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import "@std/dotenv/load";
 import { PokemonChampionsScraper } from "./scraper.ts";
 import type { RankBattleNews, PokemonInfo } from "./types.ts";
+import { logger } from "./logger.ts";
 
 const app = new Hono();
 
@@ -29,26 +30,44 @@ app.post("/api/scrape", async (c) => {
   const scraper = new PokemonChampionsScraper(kv);
 
   try {
+    logger.info("スクレイピング処理を開始します");
+
     // コンソール出力をキャプチャするための配列
     const logs: string[] = [];
     const originalLog = console.log;
+    const originalInfo = console.info;
+    const originalWarn = console.warn;
     const originalError = console.error;
 
-    // console.logとconsole.errorをオーバーライド
+    // コンソールメソッドをオーバーライドしてログをキャプチャ
     console.log = (...args: unknown[]) => {
       logs.push(args.join(" "));
       originalLog(...args);
+    };
+    console.info = (...args: unknown[]) => {
+      logs.push(args.join(" "));
+      originalInfo(...args);
+    };
+    console.warn = (...args: unknown[]) => {
+      logs.push("[WARN] " + args.join(" "));
+      originalWarn(...args);
     };
     console.error = (...args: unknown[]) => {
       logs.push("[ERROR] " + args.join(" "));
       originalError(...args);
     };
 
-    await scraper.scrapeAll();
+    try {
+      await scraper.scrapeAll();
+    } finally {
+      // 元に戻す
+      console.log = originalLog;
+      console.info = originalInfo;
+      console.warn = originalWarn;
+      console.error = originalError;
+    }
 
-    // console.logとconsole.errorを元に戻す
-    console.log = originalLog;
-    console.error = originalError;
+    logger.info("スクレイピング処理が完了しました");
 
     return c.json({
       success: true,
@@ -57,6 +76,7 @@ app.post("/api/scrape", async (c) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    logger.error("スクレイピング処理でエラーが発生しました", error);
     return c.json(
       {
         success: false,
@@ -66,6 +86,7 @@ app.post("/api/scrape", async (c) => {
     );
   } finally {
     kv.close();
+    await logger.flush();
   }
 });
 
@@ -84,6 +105,8 @@ app.get("/api/list", async (c) => {
     // シーズン名でソート（自然順ソート）
     newsList.sort((a, b) => a.season.localeCompare(b.season, undefined, { numeric: true, sensitivity: 'base' }));
 
+    logger.info("保存済みニュース一覧を取得しました", { count: newsList.length });
+
     return c.json({
       success: true,
       count: newsList.length,
@@ -91,6 +114,7 @@ app.get("/api/list", async (c) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    logger.error("保存済みニュース一覧の取得に失敗しました", error);
     return c.json(
       {
         success: false,
@@ -100,6 +124,7 @@ app.get("/api/list", async (c) => {
     );
   } finally {
     kv.close();
+    await logger.flush();
   }
 });
 
@@ -110,12 +135,14 @@ app.get("/api/json", async (c) => {
 
   try {
     const allData = await scraper.generateAllDataJson();
+    logger.info("単一JSONデータを取得しました");
     return c.json({
       success: true,
       data: allData,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    logger.error("単一JSONデータの取得に失敗しました", error);
     return c.json(
       {
         success: false,
@@ -125,6 +152,7 @@ app.get("/api/json", async (c) => {
     );
   } finally {
     kv.close();
+    await logger.flush();
   }
 });
 
@@ -140,6 +168,7 @@ app.get("/api/pokemon/:regulation", async (c) => {
     ]);
 
     if (result.value === null) {
+      logger.warn(`レギュレーション ${regulation} のポケモンリストが見つかりません`, { regulation });
       return c.json(
         {
           success: false,
@@ -159,6 +188,11 @@ app.get("/api/pokemon/:regulation", async (c) => {
       }
     }
 
+    logger.info(`レギュレーション ${regulation} のポケモンリストを取得しました`, {
+      regulation,
+      count: result.value.length,
+    });
+
     return c.json({
       success: true,
       regulation,
@@ -168,6 +202,7 @@ app.get("/api/pokemon/:regulation", async (c) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    logger.error(`レギュレーション ${regulation} のポケモンリスト取得に失敗しました`, error, { regulation });
     return c.json(
       {
         success: false,
@@ -177,6 +212,7 @@ app.get("/api/pokemon/:regulation", async (c) => {
     );
   } finally {
     kv.close();
+    await logger.flush();
   }
 });
 
@@ -205,12 +241,17 @@ app.get("/api/pokemon", async (c) => {
       };
     }
 
+    logger.info("全レギュレーションのポケモンリストを取得しました", {
+      regulationsCount: Object.keys(result).length,
+    });
+
     return c.json({
       success: true,
       data: result,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    logger.error("全レギュレーションのポケモンリスト取得に失敗しました", error);
     return c.json(
       {
         success: false,
@@ -220,6 +261,7 @@ app.get("/api/pokemon", async (c) => {
     );
   } finally {
     kv.close();
+    await logger.flush();
   }
 });
 
@@ -229,26 +271,44 @@ app.post("/api/deploy", async (c) => {
   const scraper = new PokemonChampionsScraper(kv);
 
   try {
+    logger.info("Netlifyへのデプロイリクエストを受信しました");
+
     // コンソール出力をキャプチャするための配列
     const logs: string[] = [];
     const originalLog = console.log;
+    const originalInfo = console.info;
+    const originalWarn = console.warn;
     const originalError = console.error;
 
-    // console.logとconsole.errorをオーバーライド
+    // コンソールメソッドをオーバーライド
     console.log = (...args: unknown[]) => {
       logs.push(args.join(" "));
       originalLog(...args);
+    };
+    console.info = (...args: unknown[]) => {
+      logs.push(args.join(" "));
+      originalInfo(...args);
+    };
+    console.warn = (...args: unknown[]) => {
+      logs.push("[WARN] " + args.join(" "));
+      originalWarn(...args);
     };
     console.error = (...args: unknown[]) => {
       logs.push("[ERROR] " + args.join(" "));
       originalError(...args);
     };
 
-    await scraper.deployToNetlify();
+    try {
+      await scraper.deployToNetlify();
+    } finally {
+      // 元に戻す
+      console.log = originalLog;
+      console.info = originalInfo;
+      console.warn = originalWarn;
+      console.error = originalError;
+    }
 
-    // console.logとconsole.errorを元に戻す
-    console.log = originalLog;
-    console.error = originalError;
+    logger.info("Netlifyへのデプロイ処理が完了しました");
 
     return c.json({
       success: true,
@@ -257,6 +317,7 @@ app.post("/api/deploy", async (c) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    logger.error("Netlifyへのデプロイ処理に失敗しました", error);
     return c.json(
       {
         success: false,
@@ -266,11 +327,12 @@ app.post("/api/deploy", async (c) => {
     );
   } finally {
     kv.close();
+    await logger.flush();
   }
 });
 
 // サーバー起動
 const port = parseInt(Deno.env.get("PORT") || "8000");
-console.log(`🚀 サーバーを起動しています: http://localhost:${port}`);
+logger.info(`🚀 サーバーを起動しています: http://localhost:${port}`, { port });
 
 Deno.serve({ port }, app.fetch);
